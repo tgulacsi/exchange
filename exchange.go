@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -61,12 +63,16 @@ type query struct {
 }
 
 // Client holds the one global HTTP client and the cache.
+//
+// You should set the AccessKey to your exchangerate.host access key.
 var Client = struct {
 	*http.Client
 	*gocache.Cache
+	AccessKey string
 }{
-	Client: http.DefaultClient,
-	Cache:  gocache.New(cacheDuration(), 5*time.Minute),
+	Client:    http.DefaultClient,
+	Cache:     gocache.New(cacheDuration(), 5*time.Minute),
+	AccessKey: os.Getenv("EXCHANGERATE_ACCESS_KEY"),
 }
 
 // New creates a new instance of Exchange
@@ -189,16 +195,18 @@ func (exchange *Exchange) get(url string, q query) (map[string]interface{}, erro
 
 	var result map[string]interface{}
 
-	err = json.NewDecoder(resp.Body).Decode(&result)
-
+	b, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
+	}
+	if err = json.Unmarshal(b, &result); err != nil {
+		return nil, fmt.Errorf("unmarshal %q: %w", string(b), err)
 	}
 
 	success := result["success"]
 
 	if !success.(bool) {
-		return nil, ErrInvalidAPIResponse
+		return nil, fmt.Errorf("%q: %w", string(b), ErrInvalidAPIResponse)
 	}
 
 	if exchange.CacheEnabled {
@@ -210,6 +218,8 @@ func (exchange *Exchange) get(url string, q query) (map[string]interface{}, erro
 
 func processQuery(req *http.Request, q query) error {
 	Q := req.URL.Query()
+
+	Q.Add("access_key", Client.AccessKey)
 
 	if q.Base != "" {
 		if err := ValidateCode(q.Base); err != nil {
